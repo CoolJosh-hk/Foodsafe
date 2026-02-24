@@ -1,63 +1,55 @@
 import SwiftUI
 
 struct SafetyCheckerView: View {
-    
+
     enum PageState {
-        case home
-        case form
-        case analyzing
-        case result
+        case home, form, analyzing, result
     }
-    
+
     @State private var page: PageState = .home
     @State private var riskScore: Int = 0
     @State private var resultText: String = ""
-    
+
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
-            
+
             switch page {
             case .home:
                 HomePage(page: $page)
             case .form:
-                FormPage(page: $page,
-                         riskScore: $riskScore,
-                         resultText: $resultText)
+                FormPage(page: $page, riskScore: $riskScore, resultText: $resultText)
             case .analyzing:
                 AnalyzingPage()
             case .result:
-                ResultPage(page: $page,
-                           score: riskScore,
-                           explanation: resultText)
+                ResultPage(page: $page, score: riskScore, explanation: resultText)
             }
         }
     }
 }
 
+// MARK: - Home
+
 struct HomePage: View {
     @Binding var page: SafetyCheckerView.PageState
-    
+
     let tips = [
         "Tip: Bananas with brown spots are ripe, not rotten!",
         "Tip: Slimy meat is often unsafe to consume.",
-        "Tip: Best before dates are about quality, not safety."
+        "Tip: “Best before” is about quality, not safety."
     ]
-    
-    var randomTip: String {
-        tips.randomElement() ?? tips[0]
-    }
-    
+
+    var randomTip: String { tips.randomElement() ?? tips[0] }
+
     var body: some View {
         VStack(spacing: 40) {
-            
             Text("Food Safety Checker")
                 .font(.title)
                 .foregroundColor(.primary)
-            
-            Button(action: {
+
+            Button {
                 page = .form
-            }) {
+            } label: {
                 Text("Start Checking")
                     .padding()
                     .frame(width: 200)
@@ -65,88 +57,293 @@ struct HomePage: View {
                     .foregroundColor(.white)
                     .cornerRadius(10)
             }
-            
+
             Text(randomTip)
                 .foregroundColor(.secondary)
                 .padding()
         }
+        .padding()
     }
 }
 
+// MARK: - Assessment Model (pure logic)
+
+private struct FoodObservation {
+    var category: String
+    var type: String
+
+    var moldy: Bool
+    var discoloration: Bool
+    var cloudy: Bool
+
+    var sour: Bool
+    var rottenEgg: Bool
+    var alcoholic: Bool
+    var fishy: Bool
+
+    var slimy: Bool
+    var sticky: Bool
+    var mushy: Bool
+    var dry: Bool
+
+    var leaked: Bool
+
+    var storageDays: Int
+    var storageTempC: Int
+
+    /// Hours the food spent in the “danger zone” (room temp / warm conditions).
+    var hoursAtRoomTemp: Double
+}
+
+private struct Assessment {
+    var score: Int            // 0...100
+    var headline: String      // short decision
+    var reasons: [String]     // “rules fired”
+}
+
+private func isPerishable(category: String, type: String) -> Bool {
+    // NOTE (assumption): simple mapping for a prototype to reduce uncertainty-driven waste.
+    // - Meat/Dairy/Fruits+Veg are perishable.
+    // - Carbohydrates are perishable when “Fresh” or “Opened”.
+    // - Snacks/Beverages are usually less perishable unless “Opened”.
+    let alwaysPerishable: Set<String> = ["Meat", "Dairy", "Vegetables/Fruits"]
+    if alwaysPerishable.contains(category) { return true }
+
+    if category == "Carbohydrates" {
+        return type == "Fresh" || type == "Opened (after opening)"
+    }
+
+    if category == "Snacks" || category == "Beverages" {
+        return type == "Opened (after opening)"
+    }
+
+    // Fallback
+    return type == "Fresh" || type == "Opened (after opening)"
+}
+
+private func assess(_ obs: FoodObservation) -> Assessment {
+    var reasons: [String] = []
+    let perishable = isPerishable(category: obs.category, type: obs.type)
+
+    // Key public-health concepts (high level):
+    // “Danger zone” roughly 4–60°C; time matters (2 hours, or 1 hour if very hot).
+    // We only use this as a conservative hard-stop for perishables.
+    let dangerZoneLow = 4
+    let dangerZoneHigh = 60
+    let hotDayThreshold = 32.0
+    let maxHoursOut = (Double(obs.storageTempC) >= hotDayThreshold) ? 1.0 : 2.0
+
+    // Hard-stop rules (safety-first)
+    if obs.leaked {
+        return Assessment(score: 100,
+                          headline: "Discard immediately.",
+                          reasons: ["Leaking/damaged packaging can signal contamination."])
+    }
+
+    if obs.rottenEgg {
+        return Assessment(score: 100,
+                          headline: "Discard immediately.",
+                          reasons: ["Rotten-egg odor is a strong spoilage/contamination warning sign."])
+    }
+
+    if obs.moldy && perishable {
+        return Assessment(score: 100,
+                          headline: "Discard immediately.",
+                          reasons: ["Mold on perishable food is high risk."])
+    }
+
+    if perishable,
+       obs.storageTempC >= dangerZoneLow,
+       obs.storageTempC <= dangerZoneHigh,
+       obs.hoursAtRoomTemp > maxHoursOut {
+        return Assessment(score: 100,
+                          headline: "Discard immediately.",
+                          reasons: ["Perishable food stayed in the danger zone too long (time + temperature)."])
+    }
+
+    // Strong category-specific hard-stop (best-effort with current categories)
+    if obs.fishy && obs.category == "Meat" {
+        return Assessment(score: 100,
+                          headline: "Discard immediately.",
+                          reasons: ["Fishy/rancid odor in meat/seafood-like items is a strong warning sign."])
+    }
+
+    // Additive heuristic score (quality/spoilage signals)
+    var score = 0
+
+    func add(_ points: Int, _ reason: String, if condition: Bool) {
+        guard condition else { return }
+        score += points
+        reasons.append(reason)
+    }
+
+    add(30, "Visible mold.", if: obs.moldy)
+    add(10, "Unusual discoloration.", if: obs.discoloration)
+    add(10, "Cloudy liquid.", if: obs.cloudy)
+
+    add(15, "Sour smell.", if: obs.sour)
+    add(10, "Alcoholic smell.", if: obs.alcoholic)
+    add(15, "Fishy smell.", if: obs.fishy)
+
+    add(25, "Slimy texture.", if: obs.slimy)
+    add(15, "Sticky texture.", if: obs.sticky)
+    add(10, "Mushy texture.", if: obs.mushy)
+    add(5,  "Dry/cracked texture.", if: obs.dry)
+
+    add(8, "Higher-risk category: Meat.", if: obs.category == "Meat")
+    add(5, "Higher-risk category: Dairy.", if: obs.category == "Dairy")
+
+    // Storage days (fix: avoid double counting)
+    if perishable && obs.storageDays > 5 {
+        score += 40
+        reasons.append("Stored for more than 5 days (perishable).")
+    } else if perishable && obs.storageDays > 3 {
+        score += 20
+        reasons.append("Stored for more than 3 days (perishable).")
+    }
+
+    // Temperature heuristic (use danger-zone framing)
+    if obs.storageTempC < 4 {
+        // fridge/freezer range: no penalty
+    } else if obs.storageTempC < 15 {
+        score += 10
+        reasons.append("Stored above ideal fridge temperature.")
+    } else if obs.storageTempC <= 25 {
+        score += 25
+        reasons.append("Stored in warm conditions.")
+    } else if obs.storageTempC <= 60 {
+        score += 40
+        reasons.append("Stored in the danger zone temperature range.")
+    } else {
+        // >60°C could mean “kept hot”; not penalizing here.
+    }
+
+    score = min(score, 100)
+
+    let headline: String
+    switch score {
+    case 0...25: headline = "Likely safe (based on your inputs)."
+    case 26...55: headline = "Caution advised."
+    case 56...80: headline = "High risk of spoilage."
+    default: headline = "Discard immediately."
+    }
+
+    if reasons.isEmpty {
+        reasons = ["No strong spoilage signs selected."]
+    }
+
+    return Assessment(score: score, headline: headline, reasons: reasons)
+}
+
+// MARK: - Form
+
 struct FormPage: View {
-    
+
     @Binding var page: SafetyCheckerView.PageState
     @Binding var riskScore: Int
     @Binding var resultText: String
-    
+
+    private let categories = ["Carbohydrates", "Vegetables/Fruits", "Meat", "Dairy", "Snacks", "Beverages"]
+    private let types = ["Fresh", "Packaged (unopened)", "Canned (unopened)", "Opened (after opening)"]
+
     @State private var category = ""
     @State private var type = ""
-    
+
     @State private var moldy = false
     @State private var discoloration = false
     @State private var cloudy = false
-    
+
     @State private var sour = false
     @State private var rottenEgg = false
     @State private var alcoholic = false
     @State private var fishy = false
-    
+
     @State private var slimy = false
     @State private var sticky = false
     @State private var mushy = false
     @State private var dry = false
-    
+
     @State private var leaked = false
-    
+
     @State private var storageDays = 0
     @State private var storageTemp = 5
-    
-    var isPerishable: Bool {
-        !(category == "Snacks" || category == "Beverages") &&
-        !(type == "Packaged" || type == "Canned")
-    }
-    
+
+    // NEW: hours out at room/warm temp (needed for “2-hour rule” concept)
+    @State private var hoursAtRoomTemp: Double = 0.0
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                
+            VStack(spacing: 18) {
+
                 Text("Food")
                     .font(.title2)
                     .foregroundColor(.primary)
-                
-                Picker("Category", selection: $category) {
-                    Text("Carbohydrates").tag("Carbohydrates")
-                    Text("Vegetables/Fruits").tag("Vegetables/Fruits")
-                    Text("Meat").tag("Meat")
-                    Text("Dairy").tag("Dairy")
-                    Text("Snacks").tag("Snacks")
-                    Text("Beverages").tag("Beverages")
+
+                GroupBox("Basics") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Picker("Category", selection: $category) {
+                            ForEach(categories, id: \.self) { Text($0).tag($0) }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+
+                        Picker("Type", selection: $type) {
+                            ForEach(types, id: \.self) { Text($0).tag($0) }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                    }
                 }
-                .pickerStyle(MenuPickerStyle())
-                
-                Toggle("Moldy", isOn: $moldy)
-                Toggle("Discoloration", isOn: $discoloration)
-                Toggle("Cloudy Liquid", isOn: $cloudy)
-                
-                Toggle("Sour Smell", isOn: $sour)
-                Toggle("Rotten Egg Smell", isOn: $rottenEgg)
-                Toggle("Alcoholic Smell", isOn: $alcoholic)
-                Toggle("Fishy Smell", isOn: $fishy)
-                
-                Toggle("Slimy", isOn: $slimy)
-                Toggle("Sticky", isOn: $sticky)
-                Toggle("Mushy", isOn: $mushy)
-                Toggle("Dry/Cracked", isOn: $dry)
-                
-                Toggle("Leaked/Damaged", isOn: $leaked)
-                
-                Stepper("Days Stored: \(storageDays)", value: $storageDays, in: 0...30)
-                Stepper("Storage Temp: \(storageTemp)°C", value: $storageTemp, in: -30...40)
-                
+
+                GroupBox("Appearance") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Moldy", isOn: $moldy)
+                        Toggle("Discoloration", isOn: $discoloration)
+                        Toggle("Cloudy liquid", isOn: $cloudy)
+                    }
+                }
+
+                GroupBox("Smell") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Sour smell", isOn: $sour)
+                        Toggle("Rotten-egg smell", isOn: $rottenEgg)
+                        Toggle("Alcoholic smell", isOn: $alcoholic)
+                        Toggle("Fishy smell", isOn: $fishy)
+                    }
+                }
+
+                GroupBox("Texture") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Slimy", isOn: $slimy)
+                        Toggle("Sticky", isOn: $sticky)
+                        Toggle("Mushy", isOn: $mushy)
+                        Toggle("Dry / cracked", isOn: $dry)
+                    }
+                }
+
+                GroupBox("Packaging") {
+                    Toggle("Leaking / damaged", isOn: $leaked)
+                }
+
+                GroupBox("Storage") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Stepper("Days stored: \(storageDays)", value: $storageDays, in: 0...30)
+                        Stepper("Storage temp: \(storageTemp)°C", value: $storageTemp, in: -30...80)
+
+                        Stepper(
+                            String(format: "Hours at room/warm temp: %.1f", hoursAtRoomTemp),
+                            value: $hoursAtRoomTemp,
+                            in: 0...12,
+                            step: 0.5
+                        )
+                        Text("Tip: time at room temp matters most for perishables.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Button("Start Analysis") {
                     analyze()
                     page = .analyzing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
                         page = .result
                     }
                 }
@@ -158,58 +355,47 @@ struct FormPage: View {
             .foregroundColor(.primary)
             .padding()
         }
-    }
-    
-    func analyze() {
-        if (moldy && isPerishable) ||
-            rottenEgg ||
-            leaked ||
-            (isPerishable && storageTemp > 20 && storageDays > 0) {
-            
-            riskScore = 100
-            resultText = "Severe contamination risk detected."
-            return
+        .onAppear {
+            if category.isEmpty { category = categories[0] }
+            if type.isEmpty { type = types[0] }
         }
-        
-        var score = 0
-        
-        if moldy { score += 30 }
-        if discoloration { score += 10 }
-        if cloudy { score += 10 }
-        
-        if sour { score += 15 }
-        if alcoholic { score += 10 }
-        if fishy { score += 15 }
-        
-        if slimy { score += 25 }
-        if sticky { score += 15 }
-        if mushy { score += 10 }
-        if dry { score += 5 }
-        
-        if category == "Dairy" { score += 5 }
-        if category == "Meat" { score += 8 }
-        
-        if isPerishable && storageDays > 3 { score += 20 }
-        if isPerishable && storageDays > 5 { score += 40 }
-        
-        if storageTemp >= 5 && storageTemp <= 15 { score += 10 }
-        if storageTemp > 15 && storageTemp <= 25 { score += 25 }
-        if storageTemp > 25 { score += 40 }
-        
-        riskScore = min(score, 100)
-        
-        switch riskScore {
-        case 0...25:
-            resultText = "Food appears likely safe."
-        case 26...55:
-            resultText = "Caution advised."
-        case 56...80:
-            resultText = "High risk of spoilage."
-        default:
-            resultText = "Discard immediately."
+    }
+
+    func analyze() {
+        let obs = FoodObservation(
+            category: category,
+            type: type,
+            moldy: moldy,
+            discoloration: discoloration,
+            cloudy: cloudy,
+            sour: sour,
+            rottenEgg: rottenEgg,
+            alcoholic: alcoholic,
+            fishy: fishy,
+            slimy: slimy,
+            sticky: sticky,
+            mushy: mushy,
+            dry: dry,
+            leaked: leaked,
+            storageDays: storageDays,
+            storageTempC: storageTemp,
+            hoursAtRoomTemp: hoursAtRoomTemp
+        )
+
+        let a = assess(obs)
+        riskScore = a.score
+
+        // Keep it readable: headline + top reasons (max 4)
+        let topReasons = Array(a.reasons.prefix(4))
+        if topReasons.isEmpty {
+            resultText = a.headline
+        } else {
+            resultText = a.headline + "\n\nWhy:\n- " + topReasons.joined(separator: "\n- ")
         }
     }
 }
+
+// MARK: - Analyzing / Result
 
 struct AnalyzingPage: View {
     var body: some View {
@@ -219,35 +405,37 @@ struct AnalyzingPage: View {
             Text("Analyzing...")
                 .foregroundColor(.primary)
         }
+        .padding()
     }
 }
 
 struct ResultPage: View {
-    
+
     @Binding var page: SafetyCheckerView.PageState
     var score: Int
     var explanation: String
-    
+
     var body: some View {
-        VStack(spacing: 30) {
-            
+        VStack(spacing: 22) {
+
             Text("Analysis Results")
                 .font(.title)
                 .foregroundColor(.primary)
-            
-            Gauge(value: Double(score), in: 0...100) {
-                Text("")
-            }
-            .gaugeStyle(.accessoryCircularCapacity)
-            .tint(Gradient(colors: [.green, .yellow, .orange, .red]))
-            
+
+            Gauge(value: Double(score), in: 0...100) { Text("") }
+                .gaugeStyle(.accessoryCircularCapacity)
+                .tint(Gradient(colors: [.green, .yellow, .orange, .red]))
+
             Text(explanation)
                 .foregroundColor(.primary)
-            
-            Text("This tool provides general guidance only and may not always be accurate. When in doubt, consult a food safety professional or discard the food.")
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal)
+
+            Text("General guidance only. Spoilage signs can help reduce uncertainty, but they can’t guarantee safety (some harmful germs/toxins may have no smell or visible signs). When in doubt, discard or ask a professional.")
                 .foregroundColor(.secondary)
                 .font(.footnote)
-            
+                .padding(.horizontal)
+
             Button("Back to Safety Checker") {
                 page = .home
             }
@@ -256,5 +444,6 @@ struct ResultPage: View {
             .foregroundColor(.white)
             .cornerRadius(10)
         }
+        .padding(.vertical)
     }
 }

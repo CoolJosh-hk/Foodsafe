@@ -261,7 +261,7 @@ struct ResultPage: View {
             Text(explanation)
                 .foregroundColor(.white)
             
-            Text("Disclaimer: results may not be accurate.")
+            Text("This tool provides general guidance only and may not always be accurate. When in doubt, consult a food safety professional or discard the food.")
                 .foregroundColor(.gray)
                 .font(.footnote)
             

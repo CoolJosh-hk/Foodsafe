@@ -153,7 +153,7 @@ class GameManager: ObservableObject {
 
 // MARK: - Main Content View
 
-public struct ContentView: View {
+public struct GameView: View {
     @StateObject private var gameManager = GameManager()
     @AppStorage("FoodsaveHighScore") private var highScore: Int = 0
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()

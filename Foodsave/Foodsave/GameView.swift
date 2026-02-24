@@ -162,7 +162,7 @@ public struct GameView: View {
     
     public var body: some View {
         ZStack {
-            Color(UIColor.systemGroupedBackground).ignoresSafeArea()
+            Color(UIColor.systemBackground).ignoresSafeArea()
             
             switch gameManager.state {
             case .startScreen:

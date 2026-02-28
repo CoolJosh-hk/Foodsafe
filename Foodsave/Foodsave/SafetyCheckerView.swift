@@ -99,15 +99,12 @@ private struct Assessment {
 }
 
 private func isPerishable(type: String) -> Bool {
-
     if type == "Frozen" {
         return false
     }
-
     if type == "Packaged/Canned (unopened)" {
         return false
     }
-
     // Raw, Cooked, Opened → perishable
     return true
 }
@@ -116,14 +113,6 @@ private func assess(_ obs: FoodObservation) -> Assessment {
     var reasons: [String] = []
     let daysStored = obs.storageMinutesTotal / (24 * 60)
     let perishable = isPerishable(type: obs.type)
-
-    // Key public-health concepts (high level):
-    // “Danger zone” roughly 4–60°C; time matters (2 hours, or 1 hour if very hot).
-    // We only use this as a conservative hard-stop for perishables.
-    let dangerZoneLow = 4
-    let dangerZoneHigh = 60
-    let hotDayThreshold = 32.0
-    let maxHoursOut = (Double(obs.storageTempC) >= hotDayThreshold) ? 1.0 : 2.0
 
     // Hard-stop rules
     if obs.leaked {
@@ -144,10 +133,11 @@ private func assess(_ obs: FoodObservation) -> Assessment {
                           reasons: ["Mold on perishable food is high risk."])
     }
 
-    if perishable,
-       obs.storageTempC >= dangerZoneLow,
-       obs.storageTempC <= dangerZoneHigh,
-       obs.hoursAtRoomTemp > maxHoursOut {
+    //Danger Zone = 15-60C (above room temp) and > 2h
+    if perishable &&
+       obs.storageTempC > 15 &&
+       obs.storageTempC <= 60 &&
+       obs.storageMinutesTotal > 120 {
         return Assessment(score: 100,
                           headline: "Discard immediately.",
                           reasons: ["Perishable food stayed in room temperature for over 2 hours"])
@@ -160,6 +150,17 @@ private func assess(_ obs: FoodObservation) -> Assessment {
         reasons: ["Perishable food stored over 7 days."]
     )
 }
+
+    if obs.type == "Cooked/Baked" && perishable {
+
+    if daysStored >= 4 {
+        return Assessment(
+            score: 100,
+            headline: "Discard immediately.",
+            reasons: ["Cooked food stored over 4 days."]
+        )
+    }
+    }
     
     if obs.fishy && obs.category == "Meat" {
         return Assessment(score: 100,
@@ -191,6 +192,8 @@ private func assess(_ obs: FoodObservation) -> Assessment {
 
     add(8, "Higher-risk category: Meat.", if: obs.category == "Meat")
     add(5, "Higher-risk category: Dairy.", if: obs.category == "Dairy")
+    add(5, "Higher-risk state: Raw/Fresh.", if: obs.type == "Raw/Fresh")
+    add(8, "Higher-risk state: Cooked/Baked.", if: obs.type == "Cooked/Baked")
 
     if perishable {
     if daysStored > 3 {
@@ -201,9 +204,7 @@ private func assess(_ obs: FoodObservation) -> Assessment {
 }
 
     if obs.storageTempC > 4 && obs.storageTempC <= 40 {
-
     let tempRisk = obs.storageTempC - 4   // how far above fridge temp
-
     // add 2 points per °C above 4°C
     score += min(tempRisk * 2, 70)
 
@@ -235,12 +236,24 @@ struct FormPage: View {
     @Binding var riskScore: Int
     @Binding var resultText: String
 
-    private let categories = ["Carbohydrates", "Vegetables/Fruits", "Meat", "Dairy", "Snacks", "Beverages"]
+    private let categories = ["Carbohydrates", "Vegetables", "Fruit", "Meat", "Dairy", "Snacks", "Beverages"]
     private let types = ["Raw/Fresh", "Cooked/Baked", "Packaged/Canned (unopened)", "Frozen", "Opened"]
+
+    private let foodOptions: [String: [String]] = 
+    "Carbohydrates": ["Bread","Buns", "Rice", "Pasta", "Noodles", "Oatmeal", "Corn", "Potato", "Barley", "Cereal", "Others"],
+    "Vegetables": ["Lettuce", "Spinach", "Kale", "Cabbage", "Broccoli", "Choy Sum", "Carrot", "Tomato", "Cucumber", "Zucchini", "Eggplant", "Pepper", "Onion", "Garlic", "Pumpkin", "Radish", "Green Beans", "Peas", "Corn", "Mushroom", "Bok choy", "Others"],
+    "Fruit": ["Others"]
+    "Meat": ["Chicken", "Beef", "Pork", "Turkey", "Duck", "Goose", "Venison", "Rabbit", "Quail", "Fish", Shrimp", "Crab", "Lobster", "Mussels", "Clams", "Squid/Octopus", "Others"],
+    "Dairy": ["Milk", "Cheese", "Yogurt", "Butter", "Others"],
+    "Snacks": ["Chips", "Biscuits", "Chocolate", "Others"],
+    "Beverages": ["Juice", "Soda", "Tea", "Coffee", "Others"]
+]
 
     @State private var category = ""
     @State private var type = ""
-
+    @State private var selectedFood = ""
+    @State private var isFoodExpanded = false
+    
     @State private var moldy = false
     @State private var discoloration = false
     @State private var cloudy = false
@@ -269,20 +282,41 @@ struct FormPage: View {
                 Text("Food Conditions")
                     .font(.title)
                     .foregroundColor(.primary)
+                .onChange(of: category) { newValue in
+                selectedFood = ""
+                }
+            }
+            
 
                 GroupBox("Category") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Picker("Category", selection: $category) {
-                            ForEach(categories, id: \.self) { Text($0).tag($0) }
-                        }
-                        .pickerStyle(MenuPickerStyle())
+    VStack(alignment: .leading, spacing: 12) {
 
-                        Picker("State", selection: $type) {
-                            ForEach(types, id: \.self) { Text($0).tag($0) }
-                        }
-                        .pickerStyle(MenuPickerStyle())
+        // Category Picker
+        Picker("Category", selection: $category) {
+            ForEach(categories, id: \.self) { Text($0).tag($0) }
+        }
+        .pickerStyle(MenuPickerStyle())
+
+        // Food Dropdown
+        DisclosureGroup(
+            selectedFood.isEmpty ? "Select Food" : selectedFood,
+            isExpanded: $isFoodExpanded
+        ) {
+
+            if let foods = foodOptions[category] {
+                ForEach(foods, id: \.self) { food in
+                    Button(food) {
+                        selectedFood = food
+                        isFoodExpanded = false   // auto collapse
                     }
+                    .padding(.vertical, 4)
                 }
+            }
+        }
+    }
+}
+
+                
 
                 GroupBox("Appearance") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -338,8 +372,8 @@ struct FormPage: View {
 
         Stepper("Storage Temperature: \(storageTemp)°C",
                 value: $storageTemp,
-                step = 5,
-                in: -30...80)
+                in: -30...80,
+                step: 5)
 
         Text("Tip: Time at room temperature matters most for perishables.")
             .font(.footnote)
@@ -392,9 +426,9 @@ struct FormPage: View {
             sticky: sticky,
             mushy: mushy,
             dry: dry,
-            leaked: leaked,
-            storageTotalMinutes: storageDays,
+            storageMinutesTotal: totalMinutes
             storageTempC: storageTemp,
+            leaked: leaked
         )
 
         let a = assess(obs)

@@ -86,13 +86,10 @@ private struct FoodObservation {
     var mushy: Bool
     var dry: Bool
 
-    var leaked: Bool
-
-    var storageDays: Int
+    var storageMinutesTotal: Int
     var storageTempC: Int
 
-    /// Hours the food spent in the “danger zone” (room temp / warm conditions).
-    var hoursAtRoomTemp: Double
+    var leaked: Bool
 }
 
 private struct Assessment {
@@ -123,6 +120,7 @@ private func isPerishable(category: String, type: String) -> Bool {
 
 private func assess(_ obs: FoodObservation) -> Assessment {
     var reasons: [String] = []
+    let daysStored = obs.storageMinutesTotal / (24 * 60)
     let perishable = isPerishable(category: obs.category, type: obs.type)
 
     // Key public-health concepts (high level):
@@ -133,7 +131,7 @@ private func assess(_ obs: FoodObservation) -> Assessment {
     let hotDayThreshold = 32.0
     let maxHoursOut = (Double(obs.storageTempC) >= hotDayThreshold) ? 1.0 : 2.0
 
-    // Hard-stop rules (safety-first)
+    // Hard-stop rules
     if obs.leaked {
         return Assessment(score: 100,
                           headline: "Discard immediately.",
@@ -158,10 +156,17 @@ private func assess(_ obs: FoodObservation) -> Assessment {
        obs.hoursAtRoomTemp > maxHoursOut {
         return Assessment(score: 100,
                           headline: "Discard immediately.",
-                          reasons: ["Perishable food stayed in the danger zone too long (time + temperature)."])
+                          reasons: ["Perishable food stayed in room temperature for over 2 hours"])
     }
 
-    // Strong category-specific hard-stop (best-effort with current categories)
+    if perishable && daysStored >= 7 {
+    return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Perishable food stored over 7 days."]
+    )
+}
+    
     if obs.fishy && obs.category == "Meat" {
         return Assessment(score: 100,
                           headline: "Discard immediately.",
@@ -193,30 +198,23 @@ private func assess(_ obs: FoodObservation) -> Assessment {
     add(8, "Higher-risk category: Meat.", if: obs.category == "Meat")
     add(5, "Higher-risk category: Dairy.", if: obs.category == "Dairy")
 
-    // Storage days (fix: avoid double counting)
-    if perishable && obs.storageDays > 5 {
-        score += 40
-        reasons.append("Stored for more than 5 days (perishable).")
-    } else if perishable && obs.storageDays > 3 {
-        score += 20
-        reasons.append("Stored for more than 3 days (perishable).")
+    if perishable {
+    if daysStored > 3 {
+        let extraDays = daysStored - 3
+        score += min(extraDays * 10, 60)
+        reasons.append("Stored for \(daysStored) days (perishable).")
     }
+}
 
-    // Temperature heuristic (use danger-zone framing)
-    if obs.storageTempC < 4 {
-        // fridge/freezer range: no penalty
-    } else if obs.storageTempC < 15 {
-        score += 10
-        reasons.append("Stored above ideal fridge temperature.")
-    } else if obs.storageTempC <= 25 {
-        score += 25
-        reasons.append("Stored in warm conditions.")
-    } else if obs.storageTempC <= 60 {
-        score += 40
-        reasons.append("Stored in the danger zone temperature range.")
-    } else {
-        // >60°C could mean “kept hot”; not penalizing here.
-    }
+    if obs.storageTempC > 4 && obs.storageTempC <= 40 {
+
+    let tempRisk = obs.storageTempC - 4   // how far above fridge temp
+
+    // add 2 points per °C above 4°C
+    score += min(tempRisk * 2, 70)
+
+    reasons.append("Stored at \(obs.storageTempC)°C (above safe fridge range).")
+}
 
     score = min(score, 100)
 
@@ -265,21 +263,20 @@ struct FormPage: View {
 
     @State private var leaked = false
 
-    @State private var storageDays = 0
+    @State private var storageDay = 0
+    @State private var storageHour = 0
+    @State private var storageMinute = 0
     @State private var storageTemp = 5
-
-    // NEW: hours out at room/warm temp (needed for “2-hour rule” concept)
-    @State private var hoursAtRoomTemp: Double = 0.0
 
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
 
-                Text("Food")
-                    .font(.title2)
+                Text("Food Conditions")
+                    .font(.title)
                     .foregroundColor(.primary)
 
-                GroupBox("Basics") {
+                GroupBox("Food Type") {
                     VStack(alignment: .leading, spacing: 12) {
                         Picker("Category", selection: $category) {
                             ForEach(categories, id: \.self) { Text($0).tag($0) }
@@ -319,27 +316,48 @@ struct FormPage: View {
                     }
                 }
 
-                GroupBox("Packaging") {
+
+               GroupBox("Storage Details") {
+
+               VStack(alignment: .leading, spacing: 15) {
+                   
+                   Text("Storage Time")
+                   
+               HStack {
+               Picker("Day", selection: $storageDay) {
+                   ForEach(0..<31) { Text("\($0) d").font(.caption) }
+               }
+               .pickerStyle(.wheel)
+
+               Picker("Hour", selection: $storageHour) {
+                  ForEach(0..<24) { Text("\($0) h").font(.caption) }
+               }
+               .pickerStyle(.wheel)
+
+            Picker("Minute", selection: $storageMinute) {
+                ForEach(0..<60) { Text("\($0) m").font(.caption) }
+            }
+            .pickerStyle(.wheel)
+        }
+        .frame(height: 120)
+
+
+        Stepper("Storage Temperature: \(storageTemp)°C",
+                value: $storageTemp,
+                step = 5,
+                in: -30...80)
+
+        Text("Tip: Time at room temperature matters most for perishables.")
+            .font(.footnote)
+            .foregroundColor(.secondary)
+    }
+}
+                        
+        GroupBox("Packaging") {
                     Toggle("Leaking / damaged", isOn: $leaked)
                 }
 
-                GroupBox("Storage") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Stepper("Days stored: \(storageDays)", value: $storageDays, in: 0...30)
-                        Stepper("Storage temp: \(storageTemp)°C", value: $storageTemp, in: -30...80)
-
-                        Stepper(
-                            String(format: "Hours at room/warm temp: %.1f", hoursAtRoomTemp),
-                            value: $hoursAtRoomTemp,
-                            in: 0...12,
-                            step: 0.5
-                        )
-                        Text("Tip: time at room temp matters most for perishables.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
+                
                 Button("Start Analysis") {
                     analyze()
                     page = .analyzing
@@ -362,6 +380,10 @@ struct FormPage: View {
     }
 
     func analyze() {
+        let totalMinutes =
+        storageDay * 24 * 60 +
+        storageHour * 60 +
+        storageMinute
         let obs = FoodObservation(
             category: category,
             type: type,
@@ -377,9 +399,8 @@ struct FormPage: View {
             mushy: mushy,
             dry: dry,
             leaked: leaked,
-            storageDays: storageDays,
+            storageTotalMinutes: storageDays,
             storageTempC: storageTemp,
-            hoursAtRoomTemp: hoursAtRoomTemp
         )
 
         let a = assess(obs)

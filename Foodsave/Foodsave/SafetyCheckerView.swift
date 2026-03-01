@@ -427,6 +427,11 @@ struct FormPage: View {
 
                 
                 Button("Start Analysis") {
+                    if selectedFood.isEmpty {
+        resultText = "Please select a specific food before analysis."
+        page = .result
+        return
+    }
                     analyze()
                     page = .analyzing
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {

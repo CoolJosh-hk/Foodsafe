@@ -523,9 +523,16 @@ struct ResultPage: View {
                 .font(.title)
                 .foregroundColor(.primary)
 
-            Gauge(value: Double(score), in: 0...100) { Text("") }
-                .gaugeStyle(.accessoryCircularCapacity)
-                .tint(Gradient(colors: [.green, .yellow, .orange, .red]))
+            Gauge(value: Double(score), in: 0...100) {
+    Text("")
+} currentValueLabel: {
+    Text("\(score)")
+        .font(.title2)
+        .bold()
+}
+.gaugeStyle(.accessoryCircular)
+.tint(Gradient(colors: [.green, .yellow, .orange, .red]))
+.frame(height: 160)
 
             Text(explanation)
                 .foregroundColor(.primary)

@@ -71,6 +71,7 @@ struct HomePage: View {
 private struct FoodObservation {
     var category: String
     var type: String
+    var foodName: String
 
     var moldy: Bool
     var discoloration: Bool
@@ -113,6 +114,9 @@ private func assess(_ obs: FoodObservation) -> Assessment {
     var reasons: [String] = []
     let daysStored = obs.storageMinutesTotal / (24 * 60)
     let perishable = isPerishable(type: obs.type)
+    let seafood = ["Fish", "Shrimp", "Crab", "Lobster", "Mussels", "Clams", "Squid/Octopus"]
+    let shellfish = ["Shrimp", "Crab", "Lobster", "Mussels", "Clams"]
+    let poultry = ["Chicken", "Turkey", "Duck"]
 
     // Hard-stop rules
     if obs.leaked {
@@ -151,23 +155,63 @@ private func assess(_ obs: FoodObservation) -> Assessment {
     )
 }
 
-    if obs.type == "Cooked/Baked" && perishable {
-
-    if daysStored >= 4 {
+    if obs.type == "Cooked/Baked" && perishable && daysStored > 4 {
         return Assessment(
             score: 100,
             headline: "Discard immediately.",
             reasons: ["Cooked food stored over 4 days."]
         )
     }
-    }
     
-    if obs.fishy && obs.category == "Meat" {
-        return Assessment(score: 100,
-                          headline: "Discard immediately.",
-                          reasons: ["Fishy/rancid odor in meat/seafood-like items is a strong warning sign."])
-    }
+    if seafood.contains(obs.foodName) && obs.fishy && perishable {
+        return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Strong fishy smell is a clear spoilage sign for fish."]
+    )
+}
 
+    if shellfish.contains(obs.foodName) && (obs.fishy || obs.sour || obs.rottenEgg || obs.alcoholic) && perishable {
+        return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Shellfish with abnormal odor is unsafe."]
+    )
+}
+
+    if poultry.contains(obs.foodName) &&
+   (obs.slimy || obs.sour) {
+
+    return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Raw poultry with slime or sour smell indicates high spoilage risk."]
+    )
+}
+
+    if obs.foodName == "Rice" &&
+   obs.type == "Cooked/Baked" &&
+   obs.storageTempC >= 15 &&
+   obs.storageMinutesTotal > 120 {
+
+    return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Cooked rice left at room temperature over 2 hours can be unsafe."]
+    )
+}
+
+    
+    if obs.foodName == "Milk" &&
+   obs.sour {
+
+    return Assessment(
+        score: 100,
+        headline: "Discard immediately.",
+        reasons: ["Sour smell indicates milk spoilage."]
+    )
+}
+    
     // Additive heuristic score (quality/spoilage signals)
     var score = 0
 
@@ -183,7 +227,7 @@ private func assess(_ obs: FoodObservation) -> Assessment {
 
     add(15, "Sour smell.", if: obs.sour)
     add(10, "Alcoholic smell.", if: obs.alcoholic)
-    add(15, "Fishy smell.", if: obs.fishy)
+    add(15, "Strong fishy smell.", if: obs.fishy)
 
     add(25, "Slimy texture.", if: obs.slimy)
     add(15, "Sticky texture.", if: obs.sticky)
@@ -238,17 +282,16 @@ struct FormPage: View {
 
     private let categories = ["Carbohydrates", "Vegetables", "Fruit", "Meat", "Dairy", "Snacks", "Beverages"]
     private let types = ["Raw/Fresh", "Cooked/Baked", "Packaged/Canned (unopened)", "Frozen", "Opened"]
-
-    private let foodOptions: [String: [String]] = 
+    private let foodOptions: [String: [String]] = [
     "Carbohydrates": ["Bread","Buns", "Rice", "Pasta", "Noodles", "Oatmeal", "Corn", "Potato", "Barley", "Cereal", "Others"],
     "Vegetables": ["Lettuce", "Spinach", "Kale", "Cabbage", "Broccoli", "Choy Sum", "Carrot", "Tomato", "Cucumber", "Zucchini", "Eggplant", "Pepper", "Onion", "Garlic", "Pumpkin", "Radish", "Green Beans", "Peas", "Corn", "Mushroom", "Bok choy", "Others"],
-    "Fruit": ["Others"]
-    "Meat": ["Chicken", "Beef", "Pork", "Turkey", "Duck", "Goose", "Venison", "Rabbit", "Quail", "Fish", Shrimp", "Crab", "Lobster", "Mussels", "Clams", "Squid/Octopus", "Others"],
-    "Dairy": ["Milk", "Cheese", "Yogurt", "Butter", "Others"],
-    "Snacks": ["Chips", "Biscuits", "Chocolate", "Others"],
-    "Beverages": ["Juice", "Soda", "Tea", "Coffee", "Others"]
-]
-
+    "Fruit": ["Apple", "Banana", "Orange", "Lemon", "Lime", "Mango", "Pineapple", "Watermelon", "Grapes", "Strawberry", "Berries", "Cherry", "Peach", "Plum", "Pear", "Kiwi", "Dragon fruit", "Coconut", "Avocado", "Fig", "Others"],
+    "Meat": ["Chicken", "Beef", "Pork", "Turkey", "Duck", "Goose", "Venison", "Rabbit", "Quail", "Fish", "Shrimp", "Crab", "Lobster", "Mussels", "Clams", "Squid/Octopus", "Others"],
+    "Dairy": ["Cheese", "Yogurt", "Butter", "Cream", "Others"],
+    "Snacks": ["Potato chips", "Chocolate", "Cake", "Lollipop", "Ice-cream", "Popsicle", "Popcorn", "Pretzels", "Crackers", "Bars (Protein, chocolate etc.)", "Candy", "Gummy bears", "Marshmallows", "Cookies", "Biscuits", "Brownies", "Cupcakes", "Muffins", "Donuts", "Pudding", "Jelly", "Nuts", "Seaweed snacks", "Beef jerky", "Dried fruit", "Others"],
+    "Beverages": ["Coca-cola", "Juice", "Tea", "Coffee", "Energy drink", "Smoothie", "Milk", "Chocolate milk", "Soy milk", "Coconut water", "Wine", "Cocktail", "Others"]
+    ]
+    
     @State private var category = ""
     @State private var type = ""
     @State private var selectedFood = ""
@@ -415,6 +458,7 @@ struct FormPage: View {
         let obs = FoodObservation(
             category: category,
             type: type,
+            foodName: selectedFood,
             moldy: moldy,
             discoloration: discoloration,
             cloudy: cloudy,
